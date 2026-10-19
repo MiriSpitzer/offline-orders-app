@@ -74,6 +74,7 @@ input, select {
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .dot.online { background: var(--ok); }
 .dot.offline { background: var(--err); }
+.dot.no-zoho { background: var(--warn); }
 .badge { background: var(--warn); color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 0.8rem; }
 
 /* Product list */

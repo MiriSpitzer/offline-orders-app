@@ -1,20 +1,36 @@
 "use client";
 
-// Navigation + online/offline indicator + count of unsent orders.
-// When the connection comes back, pending orders are sent automatically.
-
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
 import { resetStuckOrders, sendPendingOrders } from "@/lib/sync";
-import { isForcedOffline, setForcedOffline } from "@/lib/devOffline";
+
+const CHECK_INTERVAL_MS = 30_000;
+
+type Connection = "online" | "offline" | "no-zoho";
+
+const connectionLabel: Record<Connection, string> = {
+  online: "Online",
+  offline: "Offline",
+  "no-zoho": "No connection to Zoho",
+};
+
+async function checkConnection(): Promise<Connection> {
+  if (!navigator.onLine) return "offline";
+  try {
+    const res = await fetch("/api/ping", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+    const data = await res.json();
+    return data.reachable ? "online" : "no-zoho";
+  } catch {
+    return "no-zoho";
+  }
+}
 
 export default function StatusBar() {
   const pathname = usePathname();
-  const [online, setOnline] = useState(true);
-  const [forced, setForced] = useState(false);
+  const [connection, setConnection] = useState<Connection>("online");
 
   const pendingCount = useLiveQuery(
     () => db.orders.where("status").anyOf("pending", "failed", "sending").count(),
@@ -23,32 +39,33 @@ export default function StatusBar() {
   );
 
   useEffect(() => {
-    const update = () => setOnline(navigator.onLine && !isForcedOffline());
+    let cancelled = false;
 
-    update();
-    resetStuckOrders().then(() => sendPendingOrders());
-
-    const goOnline = () => {
-      update();
-      sendPendingOrders();
+    const check = async () => {
+      const result = await checkConnection();
+      if (cancelled) return;
+      setConnection(result);
+      if (result === "online") sendPendingOrders({ includeFailed: false });
     };
-    const goOffline = () => update();
 
-    window.addEventListener("online", goOnline);
-    window.addEventListener("offline", goOffline);
+    resetStuckOrders().then(check);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    const timer = setInterval(check, CHECK_INTERVAL_MS);
+
+    window.addEventListener("online", check);
+    window.addEventListener("offline", check);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("online", goOnline);
-      window.removeEventListener("offline", goOffline);
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("online", check);
+      window.removeEventListener("offline", check);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
-
-  function toggleForcedOffline() {
-    const next = !isForcedOffline();
-    setForcedOffline(next);
-    setForced(next);
-    setOnline(navigator.onLine && !next);
-    if (!next) sendPendingOrders(); // back "online": try sending again
-  }
 
   const links = [
     { href: "/", label: "Home" },
@@ -68,13 +85,8 @@ export default function StatusBar() {
       </nav>
       <div className="status">
         {pendingCount > 0 && <span className="badge">{pendingCount} pending</span>}
-        <span className={online ? "dot online" : "dot offline"} />
-        {online ? "Online" : "Offline"}
-        {process.env.NODE_ENV === "development" && (
-          <button type="button" className="secondary" onClick={toggleForcedOffline}>
-            {forced ? "Simulate online" : "Simulate offline"}
-          </button>
-        )}
+        <span className={"dot " + connection} />
+        {connectionLabel[connection]}
       </div>
     </header>
   );

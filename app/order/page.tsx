@@ -1,8 +1,5 @@
 "use client";
 
-// Order screen: pick a store, fill in quantities, save locally.
-// Works fully with the local database, so it also works offline.
-
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -16,21 +13,42 @@ export default function OrderPage() {
   const stores = useLiveQuery(() => db.stores.orderBy("name").toArray(), []);
 
   const [storeId, setStoreId] = useState("");
+  const storeOrders = useLiveQuery(async () => {
+    if (!storeId) return [];
+    const orders = await db.orders.where("store_id").equals(storeId).toArray();
+    return orders.sort((a, b) => b.created_at - a.created_at);
+  }, [storeId]);
+
+  const suggestedQuantities = useMemo(() => {
+    const map = new Map<string, number>();
+    const quantitiesByItem = new Map<string, number[]>();
+    for (const order of storeOrders ?? []) {
+      for (const line of order.lines) {
+        const list = quantitiesByItem.get(line.item_id) ?? [];
+        if (list.length < 3) {
+          list.push(line.quantity);
+          quantitiesByItem.set(line.item_id, list);
+        }
+      }
+    }
+    for (const [itemId, qtys] of quantitiesByItem) {
+      map.set(itemId, Math.round(qtys.reduce((sum, q) => sum + q, 0) / qtys.length));
+    }
+    return map;
+  }, [storeOrders]);
+
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
 
   const selectedStore = stores?.find((s) => s.store_id === storeId);
 
-  // Rank of each category according to the selected store's layout.
-  // Categories the store doesn't know about yet sort after the known ones.
   const categoryRank = useMemo(() => {
     const map = new Map<string, number>();
     selectedStore?.categoryOrder.forEach((category, index) => map.set(category, index));
     return map;
   }, [selectedStore]);
 
-  // Sort by the store's category order, then by group, so flavors stay together.
   const visibleItems = useMemo(() => {
     if (!items) return [];
     const q = search.trim().toLowerCase();
@@ -46,9 +64,13 @@ export default function OrderPage() {
       );
   }, [items, search, categoryRank]);
 
+  function qtyFor(itemId: string) {
+    return quantities[itemId] ?? suggestedQuantities.get(itemId) ?? 0;
+  }
+
   const lines = (items ?? [])
-    .filter((i) => (quantities[i.item_id] ?? 0) > 0)
-    .map((i) => ({ item_id: i.item_id, name: i.name, rate: i.rate, quantity: quantities[i.item_id] }));
+    .filter((i) => qtyFor(i.item_id) > 0)
+    .map((i) => ({ item_id: i.item_id, name: i.name, rate: i.rate, quantity: qtyFor(i.item_id) }));
 
   const total = lines.reduce((sum, l) => sum + l.quantity * l.rate, 0);
 
@@ -71,7 +93,7 @@ export default function OrderPage() {
     };
 
     await db.orders.add(order);
-    sendPendingOrders(); // try sending right away if there's internet
+    sendPendingOrders();
     router.push("/orders");
   }
 
@@ -117,7 +139,7 @@ export default function OrderPage() {
               const showGroup = item.group_id !== null && item.group_id !== lastGroup;
               lastCategory = item.category_name;
               lastGroup = item.group_id;
-              const qty = quantities[item.item_id] ?? 0;
+              const qty = qtyFor(item.item_id);
 
               return (
                 <li key={item.item_id}>

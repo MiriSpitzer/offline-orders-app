@@ -1,9 +1,5 @@
 "use client";
 
-// Stores screen: the importer's customers, synced from Zoho. For each one,
-// drag-and-drop the order in which product groups (categories) should
-// appear when taking an order there, e.g. the order you walk through it.
-
 import { useEffect, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
@@ -65,8 +61,6 @@ function CategoryOrderEditor({
   const [order, setOrder] = useState<string[]>([]);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
-  // Keep the list in sync with the store's saved order, and append any
-  // categories that didn't exist yet when this store's layout was last saved.
   useEffect(() => {
     const known = store.categoryOrder.filter((c) => allCategories.includes(c));
     const missing = allCategories.filter((c) => !known.includes(c));

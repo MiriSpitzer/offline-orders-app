@@ -1,7 +1,5 @@
 "use client";
 
-// Overview of all orders with their sync status.
-
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";

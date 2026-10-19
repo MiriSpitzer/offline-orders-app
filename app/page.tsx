@@ -1,7 +1,5 @@
 "use client";
 
-// Home screen: sync and an overview of what's stored locally.
-
 import Link from "next/link";
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";

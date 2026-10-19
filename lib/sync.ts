@@ -1,10 +1,5 @@
-// Two-way synchronization:
-// 1. syncMasterData: fetch products and stores (customers) -> local database
-// 2. sendPendingOrders: send pending orders -> Zoho
-
-import { fetchItems, fetchStores, sendOrder } from "./api";
+import { OfflineError, fetchItems, fetchStores, sendOrder } from "./api";
 import { db } from "./db";
-import { isForcedOffline } from "./devOffline";
 
 export async function syncMasterData() {
   const [items, remoteStores] = await Promise.all([fetchItems(), fetchStores()]);
@@ -12,12 +7,10 @@ export async function syncMasterData() {
     a.localeCompare(b)
   );
 
-  // In one transaction: if a step fails, the old data stays in place.
   await db.transaction("rw", db.items, db.stores, db.meta, async () => {
     await db.items.clear();
     await db.items.bulkPut(items);
 
-    // Keep each store's existing layout; only brand-new stores get the default order.
     const existingById = new Map((await db.stores.toArray()).map((s) => [s.store_id, s]));
     const stores = remoteStores.map((r) => ({
       store_id: r.store_id,
@@ -33,20 +26,18 @@ export async function syncMasterData() {
   return { items: items.length, stores: remoteStores.length };
 }
 
-let sending = false; // prevents two syncs from running at the same time
+let sending = false;
 
-export async function sendPendingOrders() {
-  if (sending || !navigator.onLine || isForcedOffline()) return { sent: 0, failed: 0 };
+export async function sendPendingOrders({ includeFailed = true } = {}) {
+  if (sending || !navigator.onLine) return { sent: 0, failed: 0 };
   sending = true;
 
   let sent = 0;
   let failed = 0;
 
   try {
-    const pending = await db.orders
-      .where("status")
-      .anyOf("pending", "failed")
-      .sortBy("created_at");
+    const statuses = includeFailed ? ["pending", "failed"] : ["pending"];
+    const pending = await db.orders.where("status").anyOf(statuses).sortBy("created_at");
 
     for (const order of pending) {
       await db.orders.update(order.id, { status: "sending", error: undefined });
@@ -58,6 +49,10 @@ export async function sendPendingOrders() {
         });
         sent++;
       } catch (err) {
+        if (err instanceof OfflineError) {
+          await db.orders.update(order.id, { status: "pending" });
+          break;
+        }
         await db.orders.update(order.id, {
           status: "failed",
           error: err instanceof Error ? err.message : String(err),
@@ -72,7 +67,6 @@ export async function sendPendingOrders() {
   return { sent, failed };
 }
 
-/** Resets orders stuck on "sending" (e.g. page closed) back to pending. */
 export async function resetStuckOrders() {
   await db.orders.where("status").equals("sending").modify({ status: "pending" });
 }
