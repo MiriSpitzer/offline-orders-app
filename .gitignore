@@ -4,3 +4,7 @@ out
 next-env.d.ts
 *.tsbuildinfo
 .env*.local
+
+# Serwist
+public/sw*
+public/swe-worker*
